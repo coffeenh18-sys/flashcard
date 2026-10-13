@@ -160,7 +160,15 @@ main { padding: 16px; max-width: 720px; margin: 0 auto; }
   background: color-mix(in oklab, var(--accent) 20%, transparent);
   color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: 0.02em;
 }
-.def { margin-top: 14px; font-size: clamp(16px, 3.4vw, 20px); line-height: 1.4; max-width: 90%; }
+.vi {
+  margin-top: 14px;
+  font-size: clamp(20px, 4.2vw, 26px);
+  font-weight: 700;
+  color: var(--primary);
+  max-width: 92%;
+  line-height: 1.3;
+}
+.def { margin-top: 10px; font-size: clamp(14px, 3vw, 17px); line-height: 1.4; max-width: 90%; color: var(--muted); }
 .example {
   margin-top: 12px; font-style: italic; color: var(--muted);
   font-size: 14px; max-width: 90%;
