@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = 'v6';
+  const APP_VERSION = 'v7';
   const DB_KEY = 'flashcard_db_v1';
   const THEME_KEY = 'flashcard_theme';
   const DICT_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
@@ -107,7 +107,6 @@
   const posInput = $('#posInput');
   const defInput = $('#defInput');
   const viInput = $('#viInput');
-  const exampleInput = $('#exampleInput');
   const phoneticInput = $('#phoneticInput');
   const audioInput = $('#audioInput');
   const editIdInput = $('#editIdInput');
@@ -134,8 +133,7 @@
 
   async function lookupFreeDictionary(word) {
     try {
-      const res = await fetchWithTimeout(DICT_API + encodeURIComponent(word), 10000);
-      if (res.status === 404) return { notFound: true };
+      const res = await fetchWithTimeout(DICT_API + encodeURIComponent(word), 5000);
       if (!res.ok) return null;
       const data = await res.json();
       const entry = Array.isArray(data) ? data[0] : null;
@@ -148,7 +146,6 @@
         word: entry.word || word,
         pos: posList.join(', '),
         def: firstDef?.definition || '',
-        example: firstDef?.example || '',
         phonetic: entry.phonetic || (entry.phonetics || []).find((p) => p.text)?.text || '',
         audio: (entry.phonetics || []).find((p) => p.audio)?.audio || '',
       };
@@ -159,8 +156,7 @@
 
   async function lookupWiktionary(word) {
     try {
-      const res = await fetchWithTimeout(WIKT_API + encodeURIComponent(word), 10000);
-      if (res.status === 404) return { notFound: true };
+      const res = await fetchWithTimeout(WIKT_API + encodeURIComponent(word), 7000);
       if (!res.ok) return null;
       const data = await res.json();
       const list = data.en || data.other || [];
@@ -171,11 +167,11 @@
         return (d.textContent || '').trim();
       };
       const posList = [...new Set(list.map((m) => (m.partOfSpeech || '').toLowerCase()).filter(Boolean))];
-      let def = '', example = '';
+      let def = '';
       for (const m of list) {
         for (const d of (m.definitions || [])) {
           const t = stripHTML(d.definition);
-          if (t) { def = t; example = stripHTML((d.examples || [])[0] || ''); break; }
+          if (t) { def = t; break; }
         }
         if (def) break;
       }
@@ -184,7 +180,6 @@
         word,
         pos: posList.join(', '),
         def,
-        example,
         phonetic: '',
         audio: '',
       };
@@ -216,54 +211,55 @@
     return '';
   }
 
-  function fillForm(r) {
-    posInput.value = r.pos || '';
-    defInput.value = r.def || '';
-    exampleInput.value = r.example || '';
-    phoneticInput.value = r.phonetic || '';
-    audioInput.value = r.audio || '';
-    wordInput.value = r.word || wordInput.value;
-    if (r.vi) viInput.value = r.vi;
-  }
-
   async function doLookup(raw) {
     const word = (raw || '').trim().toLowerCase();
     if (!word) return;
-    if (/\s/.test(word)) {
-      setStatus('Đang dịch cụm từ…', '');
-      const vi = await translateToVi(word);
-      if (vi) {
-        viInput.value = vi;
-        wordInput.value = word;
-        setStatus(`Đã dịch: ${vi}`, 'success');
-      } else {
-        setStatus('Không dịch được. Bạn hãy tự nhập nghĩa rồi Lưu thẻ.', 'error');
-      }
+    wordInput.value = word;
+
+    setStatus('Đang tra…', '');
+    const isPhrase = /\s/.test(word);
+
+    // Fire translation immediately — nhanh nhất, hiện trước
+    const viPromise = translateToVi(word).then((vi) => {
+      if (vi && !viInput.value) viInput.value = vi;
+      return vi;
+    });
+
+    if (isPhrase) {
+      const vi = await viPromise;
+      setStatus(vi ? `Đã dịch: ${vi}` : 'Không dịch được. Hãy tự nhập nghĩa.', vi ? 'success' : 'error');
       return;
     }
 
-    setStatus('Đang tra từ điển + dịch…', '');
-    const [dict, vi] = await Promise.all([
-      lookupFreeDictionary(word).then((r) => (r && !r.notFound ? r : null)),
-      translateToVi(word),
-    ]);
+    // Dict API + Wiktionary race — lấy cái nào trả về trước và có nghĩa
+    const dictPromise = (async () => {
+      const results = await Promise.allSettled([
+        lookupFreeDictionary(word),
+        lookupWiktionary(word),
+      ]);
+      for (const p of results) {
+        if (p.status === 'fulfilled' && p.value && p.value.def) return p.value;
+      }
+      return null;
+    })();
 
-    let r = dict;
-    if (!r) {
-      r = await lookupWiktionary(word);
-      if (r && r.notFound) r = null;
+    const [dict, vi] = await Promise.all([dictPromise, viPromise]);
+
+    if (dict) {
+      if (!posInput.value) posInput.value = dict.pos || '';
+      if (!defInput.value) defInput.value = dict.def || '';
+      if (!phoneticInput.value && dict.phonetic) phoneticInput.value = dict.phonetic;
+      if (!audioInput.value && dict.audio) audioInput.value = dict.audio;
     }
 
-    if (r && r.def) {
-      r.vi = vi;
-      fillForm(r);
-      setStatus(`Đã tìm thấy (${r.source}): ${r.pos || '—'}${vi ? ' • ' + vi : ''}`, 'success');
+    if (dict && vi) {
+      setStatus(`${vi} • ${dict.pos || dict.source}`, 'success');
     } else if (vi) {
-      viInput.value = vi;
-      wordInput.value = word;
-      setStatus(`Chỉ có bản dịch: ${vi}. Hãy tự thêm định nghĩa nếu muốn.`, 'success');
+      setStatus(`Đã dịch: ${vi}` + (dict ? '' : ' (không có định nghĩa tiếng Anh)'), 'success');
+    } else if (dict) {
+      setStatus(`Có định nghĩa (${dict.source}), chưa dịch được tiếng Việt.`, 'success');
     } else {
-      setStatus(`Không tìm thấy "${word}" ở từ điển và không dịch được. Tự nhập nghĩa rồi Lưu thẻ.`, 'error');
+      setStatus(`Không tra được "${word}". Tự nhập nghĩa rồi Lưu thẻ.`, 'error');
     }
   }
   function setStatus(msg, type) {
@@ -285,7 +281,6 @@
         c.pos = posInput.value.trim();
         c.vi = viInput.value.trim();
         c.def = defInput.value.trim();
-        c.example = exampleInput.value.trim();
         c.phonetic = phoneticInput.value.trim();
         c.audio = audioInput.value.trim();
       }
@@ -295,7 +290,6 @@
         pos: posInput.value.trim(),
         vi: viInput.value.trim(),
         def: defInput.value.trim(),
-        example: exampleInput.value.trim(),
         phonetic: phoneticInput.value.trim(),
         audio: audioInput.value.trim(),
       }));
@@ -313,7 +307,7 @@
   function clearForm() {
     wordInput.value = ''; posInput.value = ''; defInput.value = '';
     viInput.value = '';
-    exampleInput.value = ''; phoneticInput.value = ''; audioInput.value = '';
+    phoneticInput.value = ''; audioInput.value = '';
     editIdInput.value = '';
     setStatus('', '');
   }
@@ -379,7 +373,6 @@
     posInput.value = c.pos || '';
     viInput.value = c.vi || '';
     defInput.value = c.def || '';
-    exampleInput.value = c.example || '';
     phoneticInput.value = c.phonetic || '';
     audioInput.value = c.audio || '';
     editIdInput.value = c.id;
@@ -393,7 +386,6 @@
   const cardPos = $('#cardPos');
   const cardVi = $('#cardVi');
   const cardDef = $('#cardDef');
-  const cardExample = $('#cardExample');
   const audioBtn = $('#audioBtn');
   const audioPlayer = $('#audioPlayer');
   const rateRow = $('#rateRow');
@@ -403,11 +395,76 @@
   document.querySelectorAll('input[name="mode"]').forEach((r) => {
     r.addEventListener('change', (e) => { session.mode = e.target.value; startSession(); });
   });
+  let touchStart = null;
+  let swipeConsumed = false;
+  cardEl.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches[0];
+    touchStart = { x: t.clientX, y: t.clientY, time: Date.now(), moved: false };
+    swipeConsumed = false;
+  }, { passive: true });
+  cardEl.addEventListener('touchmove', (e) => {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) touchStart.moved = true;
+  }, { passive: true });
+  cardEl.addEventListener('touchend', (e) => {
+    if (!touchStart) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - touchStart.x;
+    const dy = t.clientY - touchStart.y;
+    const dt = Date.now() - touchStart.time;
+    const moved = touchStart.moved;
+    touchStart = null;
+    if (moved && Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.3 && dt < 700) {
+      swipeConsumed = true;
+      handleSwipe(dx > 0 ? 'right' : 'left');
+    }
+  });
   cardEl.addEventListener('click', () => {
+    if (swipeConsumed) { swipeConsumed = false; return; }
+    flipCard();
+  });
+  function flipCard() {
     if (!session.queue.length) return;
     cardEl.classList.add('flipped');
     rateRow.hidden = false;
     refreshIntervalLabels();
+  }
+  function handleSwipe(dir) {
+    if (!session.queue.length) return;
+    if (dir === 'left') {
+      const c = currentCardForSession();
+      if (c && cardEl.classList.contains('flipped')) applySM2(c, 3);
+      saveDB();
+      animateOut('left', () => nextCard());
+    } else {
+      animateOut('right', () => prevCard());
+    }
+  }
+  function animateOut(dir, done) {
+    const x = dir === 'left' ? -120 : 120;
+    cardEl.style.transition = 'transform 0.25s ease-out, opacity 0.25s';
+    cardEl.style.transform = `translateX(${x}%) rotate(${x / 20}deg)`;
+    cardEl.style.opacity = '0';
+    setTimeout(() => {
+      cardEl.style.transition = '';
+      cardEl.style.transform = '';
+      cardEl.style.opacity = '';
+      done();
+    }, 240);
+  }
+  function prevCard() {
+    if (session.index > 0) session.index--;
+    showCurrent();
+  }
+  document.addEventListener('keydown', (e) => {
+    if (document.querySelector('.view.active')?.id !== 'view-learn') return;
+    if (document.activeElement && /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+    if (e.key === 'ArrowRight') handleSwipe('left');
+    else if (e.key === 'ArrowLeft') handleSwipe('right');
+    else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flipCard(); }
   });
   audioBtn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -455,7 +512,6 @@
     cardPos.textContent = c.pos || '';
     cardVi.textContent = c.vi || '';
     cardDef.textContent = c.def || '';
-    cardExample.textContent = c.example ? '"' + c.example + '"' : '';
     learnProgress.textContent = (session.index + 1) + ' / ' + total;
   }
   function nextCard() {
@@ -509,6 +565,22 @@
     $('#easyInt').textContent = sim(4);
   }
 
+  let englishVoice = null;
+  function pickEnglishVoice() {
+    if (!('speechSynthesis' in window)) return;
+    const voices = speechSynthesis.getVoices();
+    if (!voices.length) return;
+    englishVoice =
+      voices.find((v) => /en[-_]US/i.test(v.lang) && /Samantha|Alex|Siri|Enhanced|Daniel|Karen/i.test(v.name)) ||
+      voices.find((v) => /en[-_]US/i.test(v.lang)) ||
+      voices.find((v) => /^en/i.test(v.lang)) ||
+      null;
+  }
+  if ('speechSynthesis' in window) {
+    pickEnglishVoice();
+    speechSynthesis.onvoiceschanged = pickEnglishVoice;
+  }
+
   function speak(card) {
     if (card.audio) {
       try {
@@ -521,9 +593,11 @@
   }
   function speakFallback(text) {
     if (!('speechSynthesis' in window)) return;
+    if (!englishVoice) pickEnglishVoice();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'en-US';
-    u.rate = 0.95;
+    u.lang = englishVoice?.lang || 'en-US';
+    if (englishVoice) u.voice = englishVoice;
+    u.rate = 0.9;
     speechSynthesis.cancel();
     speechSynthesis.speak(u);
   }
