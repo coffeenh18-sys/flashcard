@@ -1,10 +1,11 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = 'v4';
+  const APP_VERSION = 'v5';
   const DB_KEY = 'flashcard_db_v1';
   const THEME_KEY = 'flashcard_theme';
   const DICT_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
+  const WIKT_API = 'https://en.wiktionary.org/api/rest_v1/page/definition/';
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   // -------- State --------
@@ -128,6 +129,76 @@
     }
   }
 
+  async function lookupFreeDictionary(word) {
+    try {
+      const res = await fetchWithTimeout(DICT_API + encodeURIComponent(word), 10000);
+      if (res.status === 404) return { notFound: true };
+      if (!res.ok) return null;
+      const data = await res.json();
+      const entry = Array.isArray(data) ? data[0] : null;
+      if (!entry) return null;
+      const meanings = entry.meanings || [];
+      const posList = [...new Set(meanings.map((m) => m.partOfSpeech).filter(Boolean))];
+      const firstDef = meanings[0]?.definitions?.[0];
+      return {
+        source: 'dictionaryapi',
+        word: entry.word || word,
+        pos: posList.join(', '),
+        def: firstDef?.definition || '',
+        example: firstDef?.example || '',
+        phonetic: entry.phonetic || (entry.phonetics || []).find((p) => p.text)?.text || '',
+        audio: (entry.phonetics || []).find((p) => p.audio)?.audio || '',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  async function lookupWiktionary(word) {
+    try {
+      const res = await fetchWithTimeout(WIKT_API + encodeURIComponent(word), 10000);
+      if (res.status === 404) return { notFound: true };
+      if (!res.ok) return null;
+      const data = await res.json();
+      const list = data.en || data.other || [];
+      if (!list.length) return null;
+      const stripHTML = (html) => {
+        const d = document.createElement('div');
+        d.innerHTML = html || '';
+        return (d.textContent || '').trim();
+      };
+      const posList = [...new Set(list.map((m) => (m.partOfSpeech || '').toLowerCase()).filter(Boolean))];
+      let def = '', example = '';
+      for (const m of list) {
+        for (const d of (m.definitions || [])) {
+          const t = stripHTML(d.definition);
+          if (t) { def = t; example = stripHTML((d.examples || [])[0] || ''); break; }
+        }
+        if (def) break;
+      }
+      return {
+        source: 'wiktionary',
+        word,
+        pos: posList.join(', '),
+        def,
+        example,
+        phonetic: '',
+        audio: '',
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function fillForm(r) {
+    posInput.value = r.pos || '';
+    defInput.value = r.def || '';
+    exampleInput.value = r.example || '';
+    phoneticInput.value = r.phonetic || '';
+    audioInput.value = r.audio || '';
+    wordInput.value = r.word || wordInput.value;
+  }
+
   async function doLookup(raw) {
     const word = (raw || '').trim().toLowerCase();
     if (!word) return;
@@ -135,51 +206,28 @@
       setStatus('Từ điển online chỉ hỗ trợ 1 từ đơn. Với cụm từ/idiom, bạn hãy tự nhập nghĩa rồi bấm Lưu thẻ.', 'error');
       return;
     }
-    const url = DICT_API + encodeURIComponent(word);
-    const tryFetch = async () => {
-      try {
-        return await fetchWithTimeout(url, 15000);
-      } catch (_) {
-        return null;
-      }
-    };
 
-    setStatus('Đang tra từ điển…', '');
-    try {
-      let res = await tryFetch();
-      if (!res) {
-        setStatus('Từ điển đang chậm, thử lại…', '');
-        res = await tryFetch();
-      }
-      if (!res) throw new Error('Mạng/từ điển không phản hồi. Thử bấm Tra lại hoặc kiểm tra Wi-Fi.');
-      if (res.status === 404) throw new Error('Không tìm thấy từ "' + word + '". Bạn có thể tự nhập nghĩa.');
-      if (!res.ok) throw new Error('Lỗi từ điển (HTTP ' + res.status + ').');
-      const data = await res.json();
-      const entry = Array.isArray(data) ? data[0] : null;
-      if (!entry) throw new Error('Không có kết quả.');
+    setStatus('Đang tra Dictionary API…', '');
+    let r = await lookupFreeDictionary(word);
+    if (r && !r.notFound) {
+      fillForm(r);
+      setStatus(`Đã tìm thấy (dictionaryapi): ${r.pos || '—'}`, 'success');
+      return;
+    }
 
-      const meanings = entry.meanings || [];
-      const posList = [...new Set(meanings.map((m) => m.partOfSpeech).filter(Boolean))];
-      const firstMeaning = meanings[0];
-      const firstDef = firstMeaning?.definitions?.[0];
+    const dictFailed = !r;
+    setStatus(dictFailed ? 'API chính không phản hồi, thử Wiktionary…' : 'Không có trong Dictionary API, thử Wiktionary…', '');
+    r = await lookupWiktionary(word);
+    if (r && !r.notFound && r.def) {
+      fillForm(r);
+      setStatus(`Đã tìm thấy (Wiktionary): ${r.pos || '—'}`, 'success');
+      return;
+    }
 
-      const phonetic =
-        entry.phonetic ||
-        (entry.phonetics && entry.phonetics.find((p) => p.text)?.text) ||
-        '';
-      const audio =
-        (entry.phonetics && entry.phonetics.find((p) => p.audio)?.audio) || '';
-
-      posInput.value = posList.join(', ');
-      defInput.value = firstDef?.definition || '';
-      exampleInput.value = firstDef?.example || '';
-      phoneticInput.value = phonetic;
-      audioInput.value = audio;
-      wordInput.value = entry.word || word;
-
-      setStatus(`Đã tìm thấy: ${posList.join(' / ') || '—'}`, 'success');
-    } catch (err) {
-      setStatus(err.message || 'Lỗi tra cứu.', 'error');
+    if (r && r.notFound) {
+      setStatus(`Không tìm thấy "${word}" ở cả 2 từ điển. Bạn có thể tự nhập nghĩa.`, 'error');
+    } else {
+      setStatus('Cả 2 từ điển không phản hồi. Kiểm tra mạng, hoặc tự nhập nghĩa rồi Lưu thẻ.', 'error');
     }
   }
   function setStatus(msg, type) {
