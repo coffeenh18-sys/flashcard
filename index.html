@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#0f172a" media="(prefers-color-scheme: dark)" />
+<meta name="theme-color" content="#f8fafc" media="(prefers-color-scheme: light)" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="FlashCard" />
+<link rel="manifest" href="manifest.json" />
+<link rel="apple-touch-icon" href="icon-192.png" />
+<link rel="icon" type="image/svg+xml" href="icon.svg" />
+<link rel="stylesheet" href="styles.css" />
+<title>FlashCard — Học tiếng Anh</title>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">A<sup>a</sup></span>
+    <span>FlashCard</span>
+  </div>
+  <div class="top-actions">
+    <select id="deckSelect" aria-label="Chọn bộ thẻ"></select>
+    <button id="newDeckBtn" class="icon-btn" title="Bộ thẻ mới">+</button>
+    <button id="themeBtn" class="icon-btn" title="Chuyển sáng/tối">◐</button>
+    <button id="menuBtn" class="icon-btn" title="Menu">☰</button>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-view="learn" role="tab">Học</button>
+  <button class="tab" data-view="list" role="tab">Danh sách</button>
+  <button class="tab" data-view="add" role="tab">Thêm từ</button>
+  <button class="tab" data-view="stats" role="tab">Thống kê</button>
+</nav>
+
+<main>
+  <!-- VIEW: LEARN -->
+  <section id="view-learn" class="view active">
+    <div class="learn-head">
+      <div id="learnProgress" class="progress-pill">0 / 0</div>
+      <div class="learn-mode">
+        <label><input type="radio" name="mode" value="due" checked /> Ôn hôm nay</label>
+        <label><input type="radio" name="mode" value="all" /> Tất cả</label>
+        <label><input type="radio" name="mode" value="shuffle" /> Ngẫu nhiên</label>
+      </div>
+    </div>
+
+    <div class="card-stage">
+      <div id="card" class="card" tabindex="0" aria-label="Thẻ học, bấm để lật">
+        <div class="face front">
+          <div class="word" id="cardWord">—</div>
+          <div class="phonetic" id="cardPhonetic"></div>
+          <button class="audio-btn" id="audioBtn" title="Phát âm" aria-label="Phát âm">🔊</button>
+          <div class="hint">Bấm vào thẻ để xem nghĩa</div>
+        </div>
+        <div class="face back">
+          <div class="pos" id="cardPos"></div>
+          <div class="def" id="cardDef"></div>
+          <div class="example" id="cardExample"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rate-row" id="rateRow" hidden>
+      <button class="rate rate-again" data-q="0">Không nhớ<br><span>&lt; 1 phút</span></button>
+      <button class="rate rate-hard"  data-q="2">Khó<br><span id="hardInt">6 phút</span></button>
+      <button class="rate rate-good"  data-q="3">Được<br><span id="goodInt">1 ngày</span></button>
+      <button class="rate rate-easy"  data-q="4">Dễ<br><span id="easyInt">4 ngày</span></button>
+    </div>
+
+    <div id="emptyLearn" class="empty" hidden>
+      <p>Không có thẻ nào để ôn 🎉</p>
+      <p class="muted">Thêm từ mới hoặc chuyển sang "Tất cả".</p>
+    </div>
+  </section>
+
+  <!-- VIEW: LIST -->
+  <section id="view-list" class="view">
+    <div class="list-head">
+      <input id="searchInput" type="search" placeholder="Tìm từ, nghĩa, loại từ…" />
+      <span id="listCount" class="muted"></span>
+    </div>
+    <div id="cardList" class="card-list"></div>
+  </section>
+
+  <!-- VIEW: ADD -->
+  <section id="view-add" class="view">
+    <form id="addForm" class="add-form" autocomplete="off">
+      <label>
+        Từ tiếng Anh
+        <div class="input-row">
+          <input id="wordInput" type="text" placeholder="vd: serendipity" required />
+          <button type="button" id="lookupBtn" class="secondary">Tra</button>
+        </div>
+        <small class="muted">Bấm Tra (hoặc Enter) để tự điền loại từ + định nghĩa + ví dụ.</small>
+      </label>
+
+      <div id="lookupStatus" class="status" hidden></div>
+
+      <label>
+        Loại từ
+        <input id="posInput" type="text" placeholder="noun / verb / adj…" />
+      </label>
+
+      <label>
+        Định nghĩa
+        <textarea id="defInput" rows="3" placeholder="Nghĩa của từ"></textarea>
+      </label>
+
+      <label>
+        Ví dụ (tùy chọn)
+        <textarea id="exampleInput" rows="2" placeholder="Câu ví dụ"></textarea>
+      </label>
+
+      <label>
+        Phiên âm (tùy chọn)
+        <input id="phoneticInput" type="text" placeholder="/ˌsɛr.ənˈdɪp.ɪ.ti/" />
+      </label>
+
+      <input type="hidden" id="audioInput" />
+      <input type="hidden" id="editIdInput" />
+
+      <div class="form-actions">
+        <button type="submit" class="primary">Lưu thẻ</button>
+        <button type="button" id="clearFormBtn" class="ghost">Xóa form</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- VIEW: STATS -->
+  <section id="view-stats" class="view">
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-num" id="statTotal">0</div><div class="stat-label">Tổng số thẻ</div></div>
+      <div class="stat"><div class="stat-num" id="statDue">0</div><div class="stat-label">Cần ôn hôm nay</div></div>
+      <div class="stat"><div class="stat-num" id="statNew">0</div><div class="stat-label">Thẻ mới</div></div>
+      <div class="stat"><div class="stat-num" id="statLearned">0</div><div class="stat-label">Đã thuộc</div></div>
+    </div>
+    <h3>Dữ liệu</h3>
+    <div class="io-row">
+      <button id="exportBtn" class="secondary">Xuất file JSON</button>
+      <label class="secondary file-btn">
+        Nhập file JSON
+        <input id="importFile" type="file" accept="application/json,.json" hidden />
+      </label>
+      <button id="wipeBtn" class="danger">Xóa toàn bộ dữ liệu</button>
+    </div>
+    <p class="muted small">Dữ liệu được lưu trong trình duyệt Safari trên iPhone của bạn. Nhớ Xuất file định kỳ để backup.</p>
+  </section>
+</main>
+
+<!-- MENU SHEET -->
+<div id="menuSheet" class="sheet" hidden>
+  <div class="sheet-body">
+    <h3>Menu</h3>
+    <button id="menuRenameDeck" class="row-btn">Đổi tên bộ thẻ hiện tại</button>
+    <button id="menuDeleteDeck" class="row-btn danger">Xóa bộ thẻ hiện tại</button>
+    <button id="menuInstallHint" class="row-btn">Hướng dẫn cài lên iPhone</button>
+    <button id="menuClose" class="row-btn ghost">Đóng</button>
+  </div>
+</div>
+
+<!-- INSTALL HINT SHEET -->
+<div id="installSheet" class="sheet" hidden>
+  <div class="sheet-body">
+    <h3>Cài lên iPhone</h3>
+    <ol>
+      <li>Mở trang này trong <b>Safari</b> (không dùng Chrome).</li>
+      <li>Bấm nút <b>Chia sẻ</b> (hình vuông mũi tên lên) ở thanh dưới.</li>
+      <li>Chọn <b>Add to Home Screen / Thêm vào Màn hình chính</b>.</li>
+      <li>Đặt tên rồi bấm <b>Add</b>. App sẽ hiện ra như app bình thường.</li>
+    </ol>
+    <button id="installClose" class="row-btn ghost">Đóng</button>
+  </div>
+</div>
+
+<audio id="audioPlayer" preload="none"></audio>
+
+<script src="app.js" defer></script>
+</body>
+</html>
