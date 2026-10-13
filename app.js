@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = 'v7';
+  const APP_VERSION = 'v8';
   const DB_KEY = 'flashcard_db_v1';
   const THEME_KEY = 'flashcard_theme';
   const DICT_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
@@ -105,7 +105,6 @@
   // -------- Add / Lookup --------
   const wordInput = $('#wordInput');
   const posInput = $('#posInput');
-  const defInput = $('#defInput');
   const viInput = $('#viInput');
   const phoneticInput = $('#phoneticInput');
   const audioInput = $('#audioInput');
@@ -118,7 +117,7 @@
   });
   wordInput.addEventListener('blur', () => {
     const v = wordInput.value.trim();
-    if (v && !/\s/.test(v) && !defInput.value && !editIdInput.value) doLookup(v);
+    if (v && !/\s/.test(v) && !viInput.value && !editIdInput.value) doLookup(v);
   });
 
   async function fetchWithTimeout(url, ms) {
@@ -247,7 +246,6 @@
 
     if (dict) {
       if (!posInput.value) posInput.value = dict.pos || '';
-      if (!defInput.value) defInput.value = dict.def || '';
       if (!phoneticInput.value && dict.phonetic) phoneticInput.value = dict.phonetic;
       if (!audioInput.value && dict.audio) audioInput.value = dict.audio;
     }
@@ -280,7 +278,6 @@
         c.word = word;
         c.pos = posInput.value.trim();
         c.vi = viInput.value.trim();
-        c.def = defInput.value.trim();
         c.phonetic = phoneticInput.value.trim();
         c.audio = audioInput.value.trim();
       }
@@ -289,7 +286,6 @@
         word,
         pos: posInput.value.trim(),
         vi: viInput.value.trim(),
-        def: defInput.value.trim(),
         phonetic: phoneticInput.value.trim(),
         audio: audioInput.value.trim(),
       }));
@@ -305,7 +301,7 @@
   });
   $('#clearFormBtn').addEventListener('click', clearForm);
   function clearForm() {
-    wordInput.value = ''; posInput.value = ''; defInput.value = '';
+    wordInput.value = ''; posInput.value = '';
     viInput.value = '';
     phoneticInput.value = ''; audioInput.value = '';
     editIdInput.value = '';
@@ -326,7 +322,6 @@
         if (!q) return true;
         return (
           c.word.toLowerCase().includes(q) ||
-          (c.def || '').toLowerCase().includes(q) ||
           (c.vi || '').toLowerCase().includes(q) ||
           (c.pos || '').toLowerCase().includes(q)
         );
@@ -352,7 +347,7 @@
           <button class="edit" title="Sửa">✎</button>
           <button class="del" title="Xóa">✕</button>
         </div>
-        <div class="li-def">${c.vi ? '<b>' + escapeHTML(c.vi) + '</b>' : ''}${c.vi && c.def ? ' — ' : ''}${escapeHTML(c.def || '')}</div>
+        <div class="li-def">${escapeHTML(c.vi || '')}</div>
       `;
       el.querySelector('.edit').addEventListener('click', () => editCard(c.id));
       el.querySelector('.del').addEventListener('click', () => {
@@ -372,7 +367,6 @@
     wordInput.value = c.word;
     posInput.value = c.pos || '';
     viInput.value = c.vi || '';
-    defInput.value = c.def || '';
     phoneticInput.value = c.phonetic || '';
     audioInput.value = c.audio || '';
     editIdInput.value = c.id;
@@ -383,9 +377,9 @@
   const cardEl = $('#card');
   const cardWord = $('#cardWord');
   const cardPhonetic = $('#cardPhonetic');
+  const cardPhoneticBack = $('#cardPhoneticBack');
   const cardPos = $('#cardPos');
   const cardVi = $('#cardVi');
-  const cardDef = $('#cardDef');
   const audioBtn = $('#audioBtn');
   const audioPlayer = $('#audioPlayer');
   const rateRow = $('#rateRow');
@@ -466,12 +460,20 @@
     else if (e.key === 'ArrowLeft') handleSwipe('right');
     else if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flipCard(); }
   });
-  audioBtn.addEventListener('click', (e) => {
+  const audioHandler = (e) => {
     e.stopPropagation();
     const c = currentCardForSession();
     if (!c) return;
     speak(c);
-  });
+  };
+  audioBtn.addEventListener('click', audioHandler);
+  $('#audioBtnBack').addEventListener('click', audioHandler);
+  // Prevent swipe from firing when tapping audio button
+  const stopTouch = (e) => e.stopPropagation();
+  audioBtn.addEventListener('touchstart', stopTouch, { passive: true });
+  audioBtn.addEventListener('touchend', stopTouch, { passive: true });
+  $('#audioBtnBack').addEventListener('touchstart', stopTouch, { passive: true });
+  $('#audioBtnBack').addEventListener('touchend', stopTouch, { passive: true });
   rateRow.querySelectorAll('.rate').forEach((btn) => {
     btn.addEventListener('click', () => {
       const q = parseInt(btn.dataset.q, 10);
@@ -509,9 +511,9 @@
     const c = session.queue[session.index];
     cardWord.textContent = c.word;
     cardPhonetic.textContent = c.phonetic || '';
+    cardPhoneticBack.textContent = c.phonetic || '';
     cardPos.textContent = c.pos || '';
     cardVi.textContent = c.vi || '';
-    cardDef.textContent = c.def || '';
     learnProgress.textContent = (session.index + 1) + ' / ' + total;
   }
   function nextCard() {
