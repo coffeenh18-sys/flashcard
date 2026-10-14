@@ -1,13 +1,11 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = 'v8';
+  const APP_VERSION = 'v9';
   const DB_KEY = 'flashcard_db_v1';
   const THEME_KEY = 'flashcard_theme';
   const DICT_API = 'https://api.dictionaryapi.dev/api/v2/entries/en/';
-  const WIKT_API = 'https://en.wiktionary.org/api/rest_v1/page/definition/';
-  const GT_API = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&q=';
-  const MM_API = 'https://api.mymemory.translated.net/get?langpair=en%7Cvi&q=';
+  const GT_API = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=vi&dt=t&dt=bd&q=';
   const DAY_MS = 24 * 60 * 60 * 1000;
 
   // -------- State --------
@@ -130,6 +128,28 @@
     }
   }
 
+  async function googleTranslate(text) {
+    if (!text) return null;
+    try {
+      const res = await fetchWithTimeout(GT_API + encodeURIComponent(text), 8000);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const parts = (data[0] || []).map((seg) => seg[0]).filter(Boolean);
+      const primary = parts.join('').trim();
+      const groups = [];
+      if (Array.isArray(data[1])) {
+        for (const grp of data[1]) {
+          const pos = grp[0] || '';
+          const terms = Array.isArray(grp[1]) ? grp[1] : [];
+          if (pos && terms.length) groups.push({ pos, terms });
+        }
+      }
+      return { primary, groups };
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function lookupFreeDictionary(word) {
     try {
       const res = await fetchWithTimeout(DICT_API + encodeURIComponent(word), 5000);
@@ -137,14 +157,7 @@
       const data = await res.json();
       const entry = Array.isArray(data) ? data[0] : null;
       if (!entry) return null;
-      const meanings = entry.meanings || [];
-      const posList = [...new Set(meanings.map((m) => m.partOfSpeech).filter(Boolean))];
-      const firstDef = meanings[0]?.definitions?.[0];
       return {
-        source: 'dictionaryapi',
-        word: entry.word || word,
-        pos: posList.join(', '),
-        def: firstDef?.definition || '',
         phonetic: entry.phonetic || (entry.phonetics || []).find((p) => p.text)?.text || '',
         audio: (entry.phonetics || []).find((p) => p.audio)?.audio || '',
       };
@@ -153,111 +166,38 @@
     }
   }
 
-  async function lookupWiktionary(word) {
-    try {
-      const res = await fetchWithTimeout(WIKT_API + encodeURIComponent(word), 7000);
-      if (!res.ok) return null;
-      const data = await res.json();
-      const list = data.en || data.other || [];
-      if (!list.length) return null;
-      const stripHTML = (html) => {
-        const d = document.createElement('div');
-        d.innerHTML = html || '';
-        return (d.textContent || '').trim();
-      };
-      const posList = [...new Set(list.map((m) => (m.partOfSpeech || '').toLowerCase()).filter(Boolean))];
-      let def = '';
-      for (const m of list) {
-        for (const d of (m.definitions || [])) {
-          const t = stripHTML(d.definition);
-          if (t) { def = t; break; }
-        }
-        if (def) break;
-      }
-      return {
-        source: 'wiktionary',
-        word,
-        pos: posList.join(', '),
-        def,
-        phonetic: '',
-        audio: '',
-      };
-    } catch (_) {
-      return null;
-    }
-  }
-
-  async function translateToVi(text) {
-    if (!text) return '';
-    const q = encodeURIComponent(text);
-    try {
-      const res = await fetchWithTimeout(GT_API + q, 8000);
-      if (res.ok) {
-        const data = await res.json();
-        const parts = (data[0] || []).map((seg) => seg[0]).filter(Boolean);
-        const joined = parts.join('').trim();
-        if (joined) return joined;
-      }
-    } catch (_) {}
-    try {
-      const res = await fetchWithTimeout(MM_API + q, 8000);
-      if (res.ok) {
-        const data = await res.json();
-        const t = data?.responseData?.translatedText;
-        if (t) return t.trim();
-      }
-    } catch (_) {}
-    return '';
-  }
+  // Internal cache for pending translation so Save can wait for groups
+  let lastLookup = { word: '', groups: [] };
 
   async function doLookup(raw) {
     const word = (raw || '').trim().toLowerCase();
     if (!word) return;
     wordInput.value = word;
 
-    setStatus('Đang tra…', '');
-    const isPhrase = /\s/.test(word);
+    setStatus('Đang tra Google Dịch…', '');
 
-    // Fire translation immediately — nhanh nhất, hiện trước
-    const viPromise = translateToVi(word).then((vi) => {
-      if (vi && !viInput.value) viInput.value = vi;
-      return vi;
-    });
+    const [gt, dict] = await Promise.all([
+      googleTranslate(word),
+      /\s/.test(word) ? Promise.resolve(null) : lookupFreeDictionary(word),
+    ]);
 
-    if (isPhrase) {
-      const vi = await viPromise;
-      setStatus(vi ? `Đã dịch: ${vi}` : 'Không dịch được. Hãy tự nhập nghĩa.', vi ? 'success' : 'error');
-      return;
+    if (gt && gt.primary) {
+      viInput.value = gt.primary;
+      const posFromGT = gt.groups.map((g) => g.pos).join(', ');
+      if (posFromGT) posInput.value = posFromGT;
+      lastLookup = { word, groups: gt.groups };
     }
 
-    // Dict API + Wiktionary race — lấy cái nào trả về trước và có nghĩa
-    const dictPromise = (async () => {
-      const results = await Promise.allSettled([
-        lookupFreeDictionary(word),
-        lookupWiktionary(word),
-      ]);
-      for (const p of results) {
-        if (p.status === 'fulfilled' && p.value && p.value.def) return p.value;
-      }
-      return null;
-    })();
-
-    const [dict, vi] = await Promise.all([dictPromise, viPromise]);
-
     if (dict) {
-      if (!posInput.value) posInput.value = dict.pos || '';
       if (!phoneticInput.value && dict.phonetic) phoneticInput.value = dict.phonetic;
       if (!audioInput.value && dict.audio) audioInput.value = dict.audio;
     }
 
-    if (dict && vi) {
-      setStatus(`${vi} • ${dict.pos || dict.source}`, 'success');
-    } else if (vi) {
-      setStatus(`Đã dịch: ${vi}` + (dict ? '' : ' (không có định nghĩa tiếng Anh)'), 'success');
-    } else if (dict) {
-      setStatus(`Có định nghĩa (${dict.source}), chưa dịch được tiếng Việt.`, 'success');
+    if (gt && gt.primary) {
+      const extra = gt.groups.length ? ' • ' + gt.groups.length + ' loại từ' : '';
+      setStatus(`Đã dịch: ${gt.primary}${extra}`, 'success');
     } else {
-      setStatus(`Không tra được "${word}". Tự nhập nghĩa rồi Lưu thẻ.`, 'error');
+      setStatus(`Không tra được "${word}". Thử lại hoặc tự nhập nghĩa.`, 'error');
     }
   }
   function setStatus(msg, type) {
@@ -272,6 +212,7 @@
     if (!word) return;
     const deck = currentDeck();
     const editId = editIdInput.value;
+    const groups = (lastLookup.word === word) ? lastLookup.groups : [];
     if (editId) {
       const c = deck.cards.find((x) => x.id === editId);
       if (c) {
@@ -280,6 +221,7 @@
         c.vi = viInput.value.trim();
         c.phonetic = phoneticInput.value.trim();
         c.audio = audioInput.value.trim();
+        if (groups.length) c.groups = groups;
       }
     } else {
       deck.cards.push(newCard({
@@ -288,6 +230,7 @@
         vi: viInput.value.trim(),
         phonetic: phoneticInput.value.trim(),
         audio: audioInput.value.trim(),
+        groups,
       }));
     }
     saveDB();
@@ -378,8 +321,8 @@
   const cardWord = $('#cardWord');
   const cardPhonetic = $('#cardPhonetic');
   const cardPhoneticBack = $('#cardPhoneticBack');
-  const cardPos = $('#cardPos');
   const cardVi = $('#cardVi');
+  const cardGroups = $('#cardGroups');
   const audioBtn = $('#audioBtn');
   const audioPlayer = $('#audioPlayer');
   const rateRow = $('#rateRow');
@@ -512,8 +455,23 @@
     cardWord.textContent = c.word;
     cardPhonetic.textContent = c.phonetic || '';
     cardPhoneticBack.textContent = c.phonetic || '';
-    cardPos.textContent = c.pos || '';
     cardVi.textContent = c.vi || '';
+    cardGroups.innerHTML = '';
+    const groups = Array.isArray(c.groups) ? c.groups : [];
+    for (const g of groups) {
+      if (!g || !g.pos || !g.terms || !g.terms.length) continue;
+      const row = document.createElement('div');
+      row.className = 'group-row';
+      const posEl = document.createElement('span');
+      posEl.className = 'group-pos';
+      posEl.textContent = g.pos;
+      const termsEl = document.createElement('span');
+      termsEl.className = 'group-terms';
+      termsEl.textContent = g.terms.join(', ');
+      row.appendChild(posEl);
+      row.appendChild(termsEl);
+      cardGroups.appendChild(row);
+    }
     learnProgress.textContent = (session.index + 1) + ' / ' + total;
   }
   function nextCard() {
